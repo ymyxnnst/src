@@ -295,7 +295,7 @@ index a8e7c6ddbf..0cf78652e0 100644
  		__gitcomp "--cached --files --summary-limit"
  		;;
 diff --git a/git-submodule.sh b/git-submodule.sh
-index 2999b31fad..384d2bf7a8 100755
+index 2999b31fad..8630618828 100755
 --- a/git-submodule.sh
 +++ b/git-submodule.sh
 @@ -6,12 +6,13 @@
@@ -330,15 +330,6 @@ index 2999b31fad..384d2bf7a8 100755
  jobs=
  recommend_shallow=
  filter=
-@@ -67,7 +70,7 @@ for_status=
- cmd_add()
- {
- 	# parse $args after "submodule ... add".
--	while test $# -ne 0
-+		while test $# -ne 0
- 	do
- 		case "$1" in
- 		-b | --branch)
 @@ -78,6 +81,14 @@ cmd_add()
  		-b* | --branch=*)
  			branch="$1"
@@ -423,7 +414,7 @@ index 2999b31fad..384d2bf7a8 100755
  		;;
  	-q|--quiet)
 diff --git a/submodule-config.c b/submodule-config.c
-index 72a46b7a54..6f622a6f2d 100644
+index 72a46b7a54..f5545b74f9 100644
 --- a/submodule-config.c
 +++ b/submodule-config.c
 @@ -95,6 +95,7 @@ static void free_one_config(struct submodule_entry *entry)
@@ -434,7 +425,15 @@ index 72a46b7a54..6f622a6f2d 100644
  	free((void *) entry->config->url);
  	free((void *) entry->config->ignore);
  	submodule_update_strategy_release(&entry->config->update_strategy);
-@@ -652,6 +653,8 @@ static int parse_config(const char *var, const char *value,
+@@ -407,6 +408,7 @@ static struct submodule *lookup_or_create_by_name(struct submodule_cache *cache,
+ 	submodule->fetch_recurse = RECURSE_SUBMODULES_NONE;
+ 	submodule->ignore = NULL;
+ 	submodule->branch = NULL;
++	submodule->tag = NULL;
+ 	submodule->recommend_shallow = -1;
+ 
+ 	oidcpy(&submodule->gitmodules_oid, gitmodules_oid);
+@@ -652,6 +654,8 @@ static int parse_config(const char *var, const char *value,
  	} else if (!strcmp(item.buf, "branch")) {
  		if (!value)
  			ret = config_error_nonbool(var);
@@ -443,7 +442,7 @@ index 72a46b7a54..6f622a6f2d 100644
  		else if (!me->overwrite && submodule->branch)
  			warn_multiple_config(me->treeish_name, submodule->name,
  					     "branch");
-@@ -659,6 +662,16 @@ static int parse_config(const char *var, const char *value,
+@@ -659,6 +663,16 @@ static int parse_config(const char *var, const char *value,
  			free((void *)submodule->branch);
  			submodule->branch = xstrdup(value);
  		}
