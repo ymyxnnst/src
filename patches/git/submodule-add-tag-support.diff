@@ -1,0 +1,474 @@
+diff --git a/Documentation/git-submodule.adoc b/Documentation/git-submodule.adoc
+index 722d827908..926723f0d0 100644
+--- a/Documentation/git-submodule.adoc
++++ b/Documentation/git-submodule.adoc
+@@ -16,6 +16,7 @@ git submodule [--quiet] init [--] [<path>...]
+ git submodule [--quiet] deinit [-f|--force] (--all|[--] <path>...)
+ git submodule [--quiet] update [<options>] [--] [<path>...]
+ git submodule [--quiet] set-branch [<options>] [--] <path>
++git submodule [--quiet] set-tag [<options>] [--] <path>
+ git submodule [--quiet] set-url [--] <path> <newurl>
+ git submodule [--quiet] summary [<options>] [--] [<path>...]
+ git submodule [--quiet] foreach [--recursive] <command>
+@@ -202,6 +203,12 @@ specifications.
+ 	`--default` option removes the `submodule.<name>.branch` configuration
+ 	key, which causes the tracking branch to default to the remote `HEAD`.
+ 
++`set-tag (-t|--tag) <tag> [--] <path>`::
++	Set the default remote tracking tag for the submodule. The
++	`--tag` option allows the remote tag to be specified. This will
++	cause the submodule to be pinned to the specified tag when
++	running `git submodule update --remote`.
++
+ `set-url [--] <path> <newurl>`::
+ 	Set the URL of the specified submodule to _<newurl>_. Then, it will
+ 	automatically synchronize the submodule's new remote URL
+diff --git a/builtin/submodule--helper.c b/builtin/submodule--helper.c
+index 2f589e3b37..4c4ba917f7 100644
+--- a/builtin/submodule--helper.c
++++ b/builtin/submodule--helper.c
+@@ -1738,9 +1738,11 @@ struct module_clone_data {
+ 	unsigned int dissociate: 1;
+ 	unsigned int require_init: 1;
+ 	int single_branch;
++	int single_tag;
+ };
+ #define MODULE_CLONE_DATA_INIT { \
+ 	.single_branch = -1, \
++	.single_tag = -1, \
+ 	.ref_storage_format = REF_STORAGE_FORMAT_UNKNOWN, \
+ }
+ 
+@@ -1954,6 +1956,10 @@ static int clone_submodule(const struct module_clone_data *clone_data,
+ 			strvec_push(&cp.args, clone_data->single_branch ?
+ 				    "--single-branch" :
+ 				    "--no-single-branch");
++		if (clone_data->single_tag >= 0)
++			strvec_push(&cp.args, clone_data->single_tag ?
++				    "--single-branch" :
++				    "--no-single-branch");
+ 
+ 		strvec_push(&cp.args, "--");
+ 		strvec_push(&cp.args, clone_data->url);
+@@ -2198,6 +2204,7 @@ struct update_data {
+ 	int depth;
+ 	int max_jobs;
+ 	int single_branch;
++	int single_tag;
+ 	int recommend_shallow;
+ 	unsigned int require_init;
+ 	unsigned int force;
+@@ -2222,6 +2229,7 @@ struct update_data {
+ 	.recommend_shallow = -1, \
+ 	.references = STRING_LIST_INIT_DUP, \
+ 	.single_branch = -1, \
++	.single_tag = -1, \
+ 	.max_jobs = 1, \
+ }
+ 
+@@ -2667,6 +2675,30 @@ static int run_update_procedure(const struct update_data *ud)
+ 	return run_update_command(ud, subforce);
+ }
+ 
++static int remote_submodule_tag(const char *path, const char **tag)
++{
++	const struct submodule *sub;
++	char *key;
++	*tag = NULL;
++
++	sub = submodule_from_path(the_repository, null_oid(the_hash_algo), path);
++	if (!sub)
++		return die_message(_("could not initialize submodule at path '%s'"),
++				   path);
++
++	key = xstrfmt("submodule.%s.tag", sub->name);
++	if (repo_config_get_string_tmp(the_repository, key, tag))
++		*tag = sub->tag;
++	free(key);
++
++	if (!*tag) {
++		/* No tag found */
++		return 1;
++	}
++
++	return 0;
++}
++
+ static int remote_submodule_branch(const char *path, const char **branch)
+ {
+ 	const struct submodule *sub;
+@@ -2814,6 +2846,10 @@ static void update_data_to_args(const struct update_data *update_data,
+ 		strvec_push(args, update_data->single_branch ?
+ 				    "--single-branch" :
+ 				    "--no-single-branch");
++	if (update_data->single_tag >= 0)
++		strvec_push(args, update_data->single_tag ?
++				    "--single-tag" :
++				    "--no-single-tag");
+ }
+ 
+ static int update_submodule(struct update_data *update_data)
+@@ -2841,18 +2877,23 @@ static int update_submodule(struct update_data *update_data)
+ 	if (update_data->remote) {
+ 		char *remote_name;
+ 		const char *branch;
++		const char *tag;
+ 		char *remote_ref;
+ 		int code;
+ 
+ 		code = get_default_remote_submodule(update_data->sm_path, &remote_name);
+ 		if (code)
+ 			return code;
+-		code = remote_submodule_branch(update_data->sm_path, &branch);
+-		if (code) {
+-			free(remote_name);
+-			return code;
++		if (update_data->single_tag && !remote_submodule_tag(update_data->sm_path, &tag)) {
++				remote_ref = xstrfmt("refs/tags/%s", tag);
++		} else {
++			code = remote_submodule_branch(update_data->sm_path, &branch);
++			if (code) {
++				free(remote_name);
++				return code;
++			}
++			remote_ref = xstrfmt("refs/remotes/%s/%s", remote_name, branch);
+ 		}
+-		remote_ref = xstrfmt("refs/remotes/%s/%s", remote_name, branch);
+ 
+ 		free(remote_name);
+ 
+@@ -3027,6 +3068,8 @@ static int module_update(int argc, const char **argv, const char *prefix,
+ 			   N_("disallow cloning into non-empty directory, implies --init")),
+ 		OPT_BOOL(0, "single-branch", &opt.single_branch,
+ 			 N_("clone only one branch, HEAD or --branch")),
++		OPT_BOOL(0, "single-tag", &opt.single_tag,
++			 N_("clone only one tag, --tag")),
+ 		OPT_PARSE_LIST_OBJECTS_FILTER(&filter_options),
+ 		OPT_END()
+ 	};
+@@ -3036,7 +3079,7 @@ static int module_update(int argc, const char **argv, const char *prefix,
+ 		" [-N|--no-fetch] [-f|--force]"
+ 		" [--checkout|--merge|--rebase]"
+ 		" [--[no-]recommend-shallow] [--reference <repository>]"
+-		" [--recursive] [--[no-]single-branch] [--] [<path>...]"),
++		" [--recursive] [--[no-]single-branch] [--[no-]single-tag] [--] [<path>...]"),
+ 		NULL
+ 	};
+ 
+@@ -3316,6 +3359,52 @@ static int module_set_branch(int argc, const char **argv, const char *prefix,
+ 	return !!ret;
+ }
+ 
++static int module_set_tag(int argc, const char **argv, const char *prefix,
++			   struct repository *repo UNUSED)
++{
++	int ret;
++	const char *opt_tag = NULL;
++	const char *path;
++	char *config_name;
++	struct option options[] = {
++		/*
++		 * We accept the `quiet` option for uniformity across subcommands,
++		 * though there is nothing to make less verbose in this subcommand.
++		 */
++		OPT_NOOP_NOARG('q', "quiet"),
++
++		OPT_STRING('t', "tag", &opt_tag, N_("tag"),
++			N_("set the tracking tag")),
++		OPT_END()
++	};
++
++	const char *const usage[] = {
++		N_("git submodule set-tag [-q|--quiet] (-t|--tag) <tag> <path>"),
++		NULL
++	};
++	const struct submodule *sub;
++
++	argc = parse_options(argc, argv, prefix, options, usage, 0);
++
++	if (!opt_tag)
++		die(_("--tag required"));
++
++	if (argc != 1 || !(path = argv[0]))
++		usage_with_options(usage, options);
++
++	sub = submodule_from_path(the_repository, null_oid(the_hash_algo), path);
++
++	if (!sub)
++		die(_("no submodule mapping found in .gitmodules for path '%s'"),
++		    path);
++
++	config_name = xstrfmt("submodule.%s.tag", sub->name);
++	ret = config_set_in_gitmodules_file_gently(config_name, opt_tag);
++
++	free(config_name);
++	return !!ret;
++}
++
+ static int module_create_branch(int argc, const char **argv, const char *prefix,
+ 				struct repository *repo UNUSED)
+ {
+@@ -3358,6 +3447,7 @@ static int module_create_branch(int argc, const char **argv, const char *prefix,
+ struct add_data {
+ 	const char *prefix;
+ 	const char *branch;
++	const char *tag;
+ 	const char *reference_path;
+ 	char *sm_path;
+ 	const char *sm_name;
+@@ -3488,6 +3578,8 @@ static int add_submodule(const struct add_data *add_data)
+ 		if (add_data->branch) {
+ 			strvec_pushl(&cp.args, "-B", add_data->branch, NULL);
+ 			strvec_pushf(&cp.args, "origin/%s", add_data->branch);
++		} else if (add_data->tag) {
++			strvec_pushf(&cp.args, "%s", add_data->tag);
+ 		}
+ 
+ 		if (run_command(&cp))
+@@ -3545,6 +3637,10 @@ static void configure_added_submodule(struct add_data *add_data)
+ 		if (config_submodule_in_gitmodules(add_data->sm_name,
+ 						   "branch", add_data->branch))
+ 			die(_("Failed to register submodule '%s'"), add_data->sm_path);
++	} else if (add_data->tag) {
++		if (config_submodule_in_gitmodules(add_data->sm_name,
++						"tag", add_data->tag))
++			die(_("Failed to register submodule '%s'"), add_data->sm_path);
+ 	}
+ 
+ 	add_gitmodules.git_cmd = 1;
+@@ -3639,7 +3735,7 @@ static void die_on_repo_without_commits(const char *path)
+ 	strbuf_release(&sb);
+ }
+ 
+-static int module_add(int argc, const char **argv, const char *prefix,
++	static int module_add(int argc, const char **argv, const char *prefix,
+ 		      struct repository *repo UNUSED)
+ {
+ 	int force = 0, quiet = 0, progress = 0, dissociate = 0;
+@@ -3652,6 +3748,8 @@ static int module_add(int argc, const char **argv, const char *prefix,
+ 	struct option options[] = {
+ 		OPT_STRING('b', "branch", &add_data.branch, N_("branch"),
+ 			   N_("branch of repository to add as submodule")),
++		OPT_STRING('t', "tag", &add_data.tag, N_("tag"),
++			   N_("tag of repository to add as submodule")),
+ 		OPT__FORCE(&force, N_("allow adding an otherwise ignored submodule path"),
+ 			   PARSE_OPT_NOCOMPLETE),
+ 		OPT__QUIET(&quiet, N_("print only error messages")),
+@@ -3826,6 +3924,7 @@ int cmd_submodule__helper(int argc,
+ 		OPT_SUBCOMMAND("absorbgitdirs", &fn, absorb_git_dirs),
+ 		OPT_SUBCOMMAND("set-url", &fn, module_set_url),
+ 		OPT_SUBCOMMAND("set-branch", &fn, module_set_branch),
++		OPT_SUBCOMMAND("set-tag", &fn, module_set_tag),
+ 		OPT_SUBCOMMAND("create-branch", &fn, module_create_branch),
+ 		OPT_SUBCOMMAND("get-default-remote", &fn, module_get_default_remote),
+ 		OPT_END()
+diff --git a/contrib/completion/git-completion.bash b/contrib/completion/git-completion.bash
+index a8e7c6ddbf..0cf78652e0 100644
+--- a/contrib/completion/git-completion.bash
++++ b/contrib/completion/git-completion.bash
+@@ -3519,7 +3519,7 @@ _git_submodule ()
+ {
+ 	__git_has_doubledash && return
+ 
+-	local subcommands="add status init deinit update set-branch set-url summary foreach sync absorbgitdirs"
++	local subcommands="add status init deinit update set-branch set-tag set-url summary foreach sync absorbgitdirs"
+ 	local subcommand="$(__git_find_on_cmdline "$subcommands")"
+ 	if [ -z "$subcommand" ]; then
+ 		case "$cur" in
+@@ -3535,7 +3535,7 @@ _git_submodule ()
+ 
+ 	case "$subcommand,$cur" in
+ 	add,--*)
+-		__gitcomp "--branch --force --name --reference --depth"
++		__gitcomp "--branch --tag --force --name --reference --depth"
+ 		;;
+ 	status,--*)
+ 		__gitcomp "--cached --recursive"
+@@ -3553,6 +3553,9 @@ _git_submodule ()
+ 	set-branch,--*)
+ 		__gitcomp "--default --branch"
+ 		;;
++	set-tag,--*)
++		__gitcomp "--tag"
++		;;
+ 	summary,--*)
+ 		__gitcomp "--cached --files --summary-limit"
+ 		;;
+diff --git a/git-submodule.sh b/git-submodule.sh
+index 2999b31fad..384d2bf7a8 100755
+--- a/git-submodule.sh
++++ b/git-submodule.sh
+@@ -6,12 +6,13 @@
+ 
+ dashless=$(basename "$0" | sed -e 's/-/ /')
+ USAGE="[--quiet] [--cached]
+-   or: $dashless [--quiet] add [-b <branch>] [-f|--force] [--name <name>] [--reference <repository>] [--] <repository> [<path>]
++   or: $dashless [--quiet] add [-b <branch>] [-t <tag>] [-f|--force] [--name <name>] [--reference <repository>] [--] <repository> [<path>]
+    or: $dashless [--quiet] status [--cached] [--recursive] [--] [<path>...]
+    or: $dashless [--quiet] init [--] [<path>...]
+    or: $dashless [--quiet] deinit [-f|--force] (--all| [--] <path>...)
+-   or: $dashless [--quiet] update [--init [--filter=<filter-spec>]] [--remote] [-N|--no-fetch] [-f|--force] [--checkout|--merge|--rebase] [--[no-]recommend-shallow] [--reference <repository>] [--recursive] [--[no-]single-branch] [--] [<path>...]
++   or: $dashless [--quiet] update [--init [--filter=<filter-spec>]] [--remote] [-N|--no-fetch] [-f|--force] [--checkout|--merge|--rebase] [--[no-]recommend-shallow] [--reference <repository>] [--recursive] [--[no-]single-branch] [--[no-]single-tag] [--] [<path>...]
+    or: $dashless [--quiet] set-branch (--default|--branch <branch>) [--] <path>
++   or: $dashless [--quiet] set-tag (--tag <tag>) [--] <path>
+    or: $dashless [--quiet] set-url [--] <path> <newurl>
+    or: $dashless [--quiet] summary [--cached|--files] [--summary-limit <n>] [commit] [--] [<path>...]
+    or: $dashless [--quiet] foreach [--recursive] <command>
+@@ -32,6 +33,7 @@ export GIT_PROTOCOL_FROM_USER
+ command=
+ quiet=
+ branch=
++tag=
+ force=
+ reference=
+ cached=
+@@ -49,6 +51,7 @@ depth=
+ progress=
+ dissociate=
+ single_branch=
++single_tag=
+ jobs=
+ recommend_shallow=
+ filter=
+@@ -67,7 +70,7 @@ for_status=
+ cmd_add()
+ {
+ 	# parse $args after "submodule ... add".
+-	while test $# -ne 0
++		while test $# -ne 0
+ 	do
+ 		case "$1" in
+ 		-b | --branch)
+@@ -78,6 +81,14 @@ cmd_add()
+ 		-b* | --branch=*)
+ 			branch="$1"
+ 			;;
++		-t | --tag)
++			case "$2" in '') usage ;; esac
++			tag="--tag=$2"
++			shift
++			;;
++		-t* | --tag=*)
++			tag="$1"
++			;;
+ 		-f | --force)
+ 			force=$1
+ 			;;
+@@ -146,6 +157,7 @@ cmd_add()
+ 		$force \
+ 		$progress \
+ 		${branch:+"$branch"} \
++		${tag:+"$tag"} \
+ 		${reference:+"$reference"} \
+ 		${ref_format:+"$ref_format"} \
+ 		$dissociate \
+@@ -444,6 +456,50 @@ cmd_set_branch() {
+ 		"$@"
+ }
+ 
++#
++# Configures a submodule's default tag
++#
++# $@ = requested path
++#
++cmd_set_tag() {
++	default=
++	tag=
++
++	while test $# -ne 0
++	do
++		case "$1" in
++		-q|--quiet)
++			# we don't do anything with this but we need to accept it
++			;;
++		-t|--tag)
++			case "$2" in '') usage ;; esac
++			tag="--tag=$2"
++			shift
++			;;
++		-t*|--tag=*)
++			tag="$1"
++			;;
++		--)
++			shift
++			break
++			;;
++		-*)
++			usage
++			;;
++		*)
++			break
++			;;
++		esac
++		shift
++	done
++
++	git ${wt_prefix:+-C "$wt_prefix"} submodule--helper set-tag \
++		$quiet \
++		${tag:+"$tag"} \
++		-- \
++		"$@"
++}
++
+ #
+ # Configures a submodule's remote url
+ #
+@@ -629,7 +685,7 @@ cmd_absorbgitdirs()
+ while test $# != 0 && test -z "$command"
+ do
+ 	case "$1" in
+-	add | foreach | init | deinit | update | set-branch | set-url | status | summary | sync | absorbgitdirs)
++	add | foreach | init | deinit | update | set-branch | set-tag | set-url | status | summary | sync | absorbgitdirs)
+ 		command=$1
+ 		;;
+ 	-q|--quiet)
+diff --git a/submodule-config.c b/submodule-config.c
+index 72a46b7a54..6f622a6f2d 100644
+--- a/submodule-config.c
++++ b/submodule-config.c
+@@ -95,6 +95,7 @@ static void free_one_config(struct submodule_entry *entry)
+ 	free((void *) entry->config->path);
+ 	free((void *) entry->config->name);
+ 	free((void *) entry->config->branch);
++	free((void *) entry->config->tag);
+ 	free((void *) entry->config->url);
+ 	free((void *) entry->config->ignore);
+ 	submodule_update_strategy_release(&entry->config->update_strategy);
+@@ -652,6 +653,8 @@ static int parse_config(const char *var, const char *value,
+ 	} else if (!strcmp(item.buf, "branch")) {
+ 		if (!value)
+ 			ret = config_error_nonbool(var);
++		else if (submodule->branch && submodule->tag)
++			die(_("can not specify both tag and branch '%s'"), var);
+ 		else if (!me->overwrite && submodule->branch)
+ 			warn_multiple_config(me->treeish_name, submodule->name,
+ 					     "branch");
+@@ -659,6 +662,16 @@ static int parse_config(const char *var, const char *value,
+ 			free((void *)submodule->branch);
+ 			submodule->branch = xstrdup(value);
+ 		}
++	} else if (!strcmp(item.buf, "tag")) {
++		if (!value)
++			ret = config_error_nonbool(var);
++		else if (!me->overwrite && submodule->tag)
++			warn_multiple_config(me->treeish_name, submodule->name,
++					     "tag");
++		else {
++			free((void *)submodule->tag);
++			submodule->tag = xstrdup(value);
++		}
+ 	}
+ 
+ 	strbuf_release(&name);
+diff --git a/submodule-config.h b/submodule-config.h
+index f55d4e3b61..b628a5ccbd 100644
+--- a/submodule-config.h
++++ b/submodule-config.h
+@@ -38,6 +38,7 @@ struct submodule {
+ 	enum submodule_recurse_mode fetch_recurse;
+ 	const char *ignore;
+ 	const char *branch;
++	const char *tag;
+ 	struct submodule_update_strategy update_strategy;
+ 	/* the object id of the responsible .gitmodules file */
+ 	struct object_id gitmodules_oid;
