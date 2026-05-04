@@ -1,0 +1,41 @@
+name: patch-git
+
+on:
+   workflow_call:
+     outputs:
+       git-path:
+         description: "Path to patched git bin"
+         value: /opt/git/bin
+
+jobs:
+  patch-git:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cache patched git
+        uses: actions/cache@v5
+        with:
+          path: /opt/git
+          key: ${{ runner.os }}-git
+
+      - name: Checkout main repository
+        uses: actions/checkout@v6
+        with:
+          path: main
+
+      - name: Checkout git/git repository
+        uses: actions/checkout@v6
+        with:
+          repository: git/git
+          path: git
+
+      - name: Build and install patched git
+        run: |
+          sudo apt install -y gettext libcurl4-openssl-dev
+          cd git
+          git apply ../main/patches/git/submodule-add-tag-support.diff
+          autoconf
+          ./configure --prefix=/opt/git --with-gitconfig=/etc/gitconfig --with-python=python3
+          make
+          sudo make install
+          cd ..
+          rm -rf git main
