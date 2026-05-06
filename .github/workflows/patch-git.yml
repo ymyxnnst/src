@@ -1,4 +1,4 @@
-name: build
+name: patch-git
 
 on:
    workflow_call:
@@ -8,7 +8,7 @@ on:
          value: /opt/git/bin
 
 jobs:
-  patch-git:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Cache patched git
@@ -30,6 +30,7 @@ jobs:
 
       - name: Build and install patched git
         run: |
+          sudo apt update
           sudo apt install -y gettext libcurl4-openssl-dev
           cd git
           git apply ../main/patches/git/submodule-add-tag-support.diff
