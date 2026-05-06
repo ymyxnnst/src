@@ -6,19 +6,27 @@
 	path = glibc
 	url = https://sourceware.org/git/glibc
 	tag = glibc-2.43
-[submodule "util-linux"]
-	path = util-linux
-	url = https://github.com/util-linux/util-linux
-	tag = v2.42
-[submodule "systemd"]
-	path = systemd
-	url = https://github.com/systemd/systemd
-	tag = v260.1
-[submodule "zsh"]
-	path = zsh
-	url = https://git.code.sf.net/p/zsh/code
-	tag = zsh-5.9
 [submodule "linux"]
 	path = linux
 	url = https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux
 	tag = v7.1-rc2
+[submodule "neovim"]
+	path = neovim
+	url = https://github.com/neovim/neovim
+	tag = v0.12.2
+[submodule "python"]
+	path = python
+	url = https://github.com/python/cpython
+	tag = v3.14.5rc1
+[submodule "systemd"]
+	path = systemd
+	url = https://github.com/systemd/systemd
+	tag = v260.1
+[submodule "util-linux"]
+	path = util-linux
+	url = https://github.com/util-linux/util-linux
+	tag = v2.42
+[submodule "zsh"]
+	path = zsh
+	url = https://git.code.sf.net/p/zsh/code
+	tag = zsh-5.9
